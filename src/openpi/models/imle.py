@@ -77,26 +77,26 @@ class IMLEModel(Pi0):
         preprocess_rng, key_z, key_eps = jax.random.split(rng, 3)
         observation = _model.preprocess_observation(preprocess_rng, observation, train=train)
         B, T, D = actions.shape # batch, horizon, action_dim
-        jax.debug.print("action shape: {}", actions.shape)
+        # jax.debug.print("action shape: {}", actions.shape)
         K = self.cfg.num_noise_samples
 
         # encode prefix, same as sample actions for pi0
-        prefix_tok, prefix_m, prefix_ar = self.embed_prefix(observation)
-        jax.debug.print("prefix shape: {}", prefix_tok.shape)
+        prefix_tok, prefix_m, prefix_ar = self.embed_prefix(observation) # need to clean up! prefix m vs mask is confusing
+        # jax.debug.print("prefix shape: {}", prefix_tok.shape)
         pref_mask = make_attn_mask(prefix_m, prefix_ar)
-        jax.debug.print("prefix mask shape: {}", pref_mask.shape)
+        # jax.debug.print("prefix mask shape: {}", pref_mask.shape)
         pref_pos  = jnp.cumsum(prefix_m, axis=1) - 1
         _, kv_cache = self.PaliGemma.llm(
             [prefix_tok, None], mask=pref_mask, positions=pref_pos
         )
 
-        jax.debug.print("kv_cache shape computed")
+        # jax.debug.print("kv_cache shape computed")
 
         # now pass over each of the k latents, note diff shape 
         z_shape = (K, B, T, D)
         z = jax.random.normal(key_z, z_shape)
 
-        jax.debug.print("z shape: {}", z.shape)
+        # jax.debug.print("z shape: {}", z.shape)
 
         # vmap over first axis = K
         # alternative is to create a KxB batch and pass it into embed_suffix direclty?
@@ -108,13 +108,14 @@ class IMLEModel(Pi0):
                 latent=z_k,
                 prefix_cache=kv_cache,
                 prefix_mask=prefix_m,
+                inference=False,
             ),
             in_axes=0, # z_k batched, cache broadcast
         )(z)  # (K,B,T,D)
 
         cand = jnp.transpose(k_acts, (1,0,2,3))
 
-        jax.debug.print("cand shape: {}", cand.shape)
+        # jax.debug.print("cand shape: {}", cand.shape)
 
 
         diff = cand - actions[:, None] # (B, K, T, D)
@@ -150,26 +151,31 @@ class IMLEModel(Pi0):
         prefix_cache=None,
         prefix_mask=None,
         num_steps: int | at.Int[at.Array, ""] = 1,
+        inference: bool = True,
     ) -> _model.Actions:
         """
         normal inf:  pass rng, latent/prefix should be None
         loss : pass a pre‑drawn latent
         """
-        if latent is None:  # inference
+        # jax.debug.print("obs shape: {}", observation.state.shape)
+        if inference:  # inference
             observation = _model.preprocess_observation(None, observation, train=False)
             B, T, D = observation.state.shape[0], self.action_horizon, self.action_dim
             latent = jax.random.normal(rng, (B, T, D))
 
             # build prefix once
-            prefix_tok, prefix_m, prefix_ar = self.embed_prefix(observation)
-            prefix_mask = make_attn_mask(prefix_m, prefix_ar)
-            pos = jnp.cumsum(prefix_m, axis=1) - 1
-            _, prefix_cache = self.PaliGemma.llm([prefix_tok, None], mask=prefix_mask, positions=pos)
+            prefix_tok, prefix_mask, prefix_ar = self.embed_prefix(observation)
+            prefix_m = make_attn_mask(prefix_mask, prefix_ar)
+            pos = jnp.cumsum(prefix_mask, axis=1) - 1
+            _, prefix_cache = self.PaliGemma.llm([prefix_tok, None], mask=prefix_m, positions=pos)
+            # jax.debug.print("prefix cache shape: {}", prefix_cache[0].shape)
+            # jax.debug.print("latent shape: {}", latent.shape)
 
         # suffix pass is shared
         suf_tok, suf_m, suf_ar = self.embed_suffix_imle(observation, latent)
         suf_internal = make_attn_mask(suf_m, suf_ar)
         suf_to_pref  = jnp.repeat(prefix_mask[:, None, :], suf_tok.shape[1], axis=1)
+
         full_mask    = jnp.concatenate([suf_to_pref, suf_internal], axis=-1)
         pos_suf = jnp.sum(prefix_mask, axis=-1)[:, None] + jnp.cumsum(suf_m, axis=1) - 1
 
@@ -177,4 +183,6 @@ class IMLEModel(Pi0):
             [None, suf_tok], mask=full_mask, positions=pos_suf, kv_cache=prefix_cache
         )
         return self.action_out_proj(suf_out[:, -self.action_horizon :])
+
+  
 
