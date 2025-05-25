@@ -150,14 +150,14 @@ class IMLEModel(Pi0):
         latent: at.Float[at.Array, "b t d"] | None = None,
         prefix_cache=None,
         prefix_mask=None,
-        num_steps: int | at.Int[at.Array, ""] = 1,
+        # num_steps: int | at.Int[at.Array, ""] = 1,
         inference: bool = True,
     ) -> _model.Actions:
         """
         normal inf:  pass rng, latent/prefix should be None
         loss : pass a pre‑drawn latent
         """
-        # jax.debug.print("obs shape: {}", observation.state.shape)
+        # jax.debug.print("num steps: {}", num_steps)
         if inference:  # inference
             observation = _model.preprocess_observation(None, observation, train=False)
             B, T, D = observation.state.shape[0], self.action_horizon, self.action_dim

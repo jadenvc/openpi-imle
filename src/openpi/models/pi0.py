@@ -6,7 +6,7 @@ import flax.nnx as nnx
 import flax.nnx.bridge as nnx_bridge
 import jax
 import jax.numpy as jnp
-from typing_extensions import override
+from typing_extensions import override, Optional
 
 from openpi.models import model as _model
 import openpi.models.gemma as _gemma
@@ -74,6 +74,7 @@ class Pi0Config(_model.BaseModelConfig):
     action_dim: int = 32
     action_horizon: int = 50
     max_token_len: int = 48
+    num_steps: int = 10
 
     @property
     @override
@@ -170,6 +171,7 @@ class Pi0(_model.BaseModel):
         self.action_time_mlp_in = nnx.Linear(2 * action_expert_config.width, action_expert_config.width, rngs=rngs)
         self.action_time_mlp_out = nnx.Linear(action_expert_config.width, action_expert_config.width, rngs=rngs)
         self.action_out_proj = nnx.Linear(action_expert_config.width, config.action_dim, rngs=rngs)
+        self.num_steps = config.num_steps
 
     @at.typecheck
     def embed_prefix(
@@ -271,8 +273,13 @@ class Pi0(_model.BaseModel):
         rng: at.KeyArrayLike,
         observation: _model.Observation,
         *,
-        num_steps: int | at.Int[at.Array, ""] = 10,
+        num_steps: Optional[int | at.Int[at.Array, ""]] = None,
     ) -> _model.Actions:
+
+        if num_steps is None:
+            num_steps = self.num_steps
+
+        # jax.debug.print("sampling actions with num_steps: {}", num_steps)
         observation = _model.preprocess_observation(None, observation, train=False)
         # note that we use the convention more common in diffusion literature, where t=1 is noise and t=0 is the target
         # distribution. yes, this is the opposite of the pi0 paper, and I'm sorry.
